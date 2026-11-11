@@ -268,6 +268,16 @@ lgpd/
 │   └── scanner.py
 │       Motor agnostico de varredura estatica sem dependencias externas
 │
+├── skills/
+│   ├── lgpd-audit/
+│   │   ├── SKILL.md
+│   │   └── scripts/scanner.py
+│   ├── lgpd-pii/
+│   │   ├── SKILL.md
+│   │   └── scripts/scanner.py
+│   └── lgpd-fix/
+│       └── SKILL.md
+│
 └── tests/
     └── fixtures/
         └── sample_app/

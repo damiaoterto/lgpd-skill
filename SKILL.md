@@ -1,6 +1,9 @@
 ---
 name: lgpd-compliance-auditor
-description: Technology-agnostic LGPD (Brazilian General Data Protection Law 13.709/2018) compliance auditor for source code. Scans codebases for personal data mapping, unmasked log leaks, pre-checked consent controls, data subject rights (DSR) workflows, retention policies, and security gaps with strict evidence-based grounding.
+description: >-
+  Technology-agnostic LGPD (Brazilian General Data Protection Law 13.709/2018) compliance auditor for source code.
+  Scans codebases for personal data mapping, unmasked log leaks, pre-checked consent controls, data subject rights (DSR) workflows, retention policies, and security gaps with strict evidence-based grounding.
+  Triggers include /lgpd-audit, /lgpd-pii, /lgpd-fix, "auditar lgpd", "verificar lgpd", "mapear pii", "corrigir lgpd", "lgpd audit".
 ---
 
 # LGPD Compliance Auditor Skill
