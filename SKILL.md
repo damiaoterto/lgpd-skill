@@ -7,6 +7,14 @@ description: Technology-agnostic LGPD (Brazilian General Data Protection Law 13.
 
 This skill performs a rigorous, technology-agnostic compliance audit against the Brazilian General Data Protection Law (Lei 13.709/2018 - LGPD) across any codebase.
 
+## Triggers and Commands
+
+The skill reacts to natural language requests as well as three standardized commands:
+
+1. `/lgpd-audit`: Runs a complete 7-axis audit across the codebase and outputs the Executive Summary, Compliance Scorecard (0 to 100), Vulnerability Matrix, and Remediation Plan.
+2. `/lgpd-pii`: Focuses exclusively on data persistence and contracts (SQL schemas, ORM models, migrations, DTOs, interfaces) to output the formal Personal Data Inventory (ROPA mapping) with sensitivity classifications and recommended legal grounds under Article 7.
+3. `/lgpd-fix <target>`: Applies minimal, zero-breaking surgical remediations to a specific finding (e.g. sanitizing unmasked logs, setting checkboxes to opt-in, or drafting an anonymization procedure).
+
 ## Core Operational Rules
 
 1. Strict Evidence-Based Grounding: Every reported gap must reference an existing file, an exact line number, and a literal code snippet of at most three lines. Never infer, speculate, or report theoretical vulnerabilities without direct code evidence.
@@ -31,6 +39,12 @@ Always attempt to execute the bundled Python helper script first:
 python3 scripts/scanner.py --dir .
 ```
 
+If a `.lgpdrc` or `.lgpdrc.json` configuration file exists in the repository, the script automatically applies:
+• Official DPO contact details (fulfilling Article 41)
+• Custom business PII terms added to detection patterns
+• Ignored paths (mocks, test fixtures, discarded migrations)
+• Suppressed findings approved by the DPO with documented justification
+
 Read the generated JSON output containing categorized findings across the following buckets:
 • common_pii
 • sensitive_pii
@@ -39,6 +53,8 @@ Read the generated JSON output containing categorized findings across the follow
 • third_party_trackers
 • soft_delete_retention
 • dpo_contacts
+• suppressed_findings
+• governance (dpo_configured)
 
 ### Autonomous Fallback Flow
 If the environment does not permit running shell scripts, if Python 3 is unavailable, or if script execution fails, operate autonomously using standard codebase search tools:
@@ -92,7 +108,14 @@ Sumário Executivo de Conformidade
 | :--- | :--- | :--- | :--- | :--- |
 | [CRÍTICO / ALTO / MÉDIO] | [Artigo Oficial] | [arquivo e linha exata] | [Diagnóstico objetivo com citação] | [Recomendação técnica direta] |
 
-3. Plano Cronológico de Remediação
+3. Justificativas e Supressões Homologadas pelo DPO (.lgpdrc)
+(Apresentar esta seção apenas quando houver supressões homologadas ativas)
+
+| Arquivo e Linha | Achado Original | Justificativa Registrada | Aprovador | Impacto no Score |
+| :--- | :--- | :--- | :--- | :--- |
+| [arquivo e linha] | [tipo de achado] | [motivo documentado] | [nome ou email do DPO] | Risco Mitigado (Sem Dedução) |
+
+4. Plano Cronológico de Remediação
 
 | Fase | Prazo Sugerido | Escopo de Atuação | Objetivo Central |
 | :--- | :--- | :--- | :--- |

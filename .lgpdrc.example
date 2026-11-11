@@ -1,0 +1,28 @@
+{
+  "dpo": {
+    "name": "Encarregado de Protecao de Dados",
+    "email": "dpo@empresa.com.br",
+    "channel_url": "https://empresa.com.br/privacidade"
+  },
+  "custom_pii": [
+    "matricula_funcional",
+    "numero_beneficio",
+    "registro_geral"
+  ],
+  "custom_sensitive": [
+    "laudo_medico",
+    "prescricao_medicamentosa"
+  ],
+  "ignore_paths": [
+    "database/seeds/**",
+    "tests/mocks/**"
+  ],
+  "suppressions": [
+    {
+      "file": "tests/fixtures/sample_app/auth_controller.ts",
+      "line": 5,
+      "reason": "Payload devidamente sanitizado por proxy interno antes do log",
+      "approved_by": "dpo@empresa.com.br"
+    }
+  ]
+}

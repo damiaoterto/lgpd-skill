@@ -2,16 +2,18 @@
 """
 LGPD Compliance Code Scanner (Brazilian General Data Protection Law 13709/2018)
 Technology-agnostic scanner using Python standard library only.
+Supports repository configuration via .lgpdrc / .lgpdrc.json files.
 """
 
 import os
 import sys
 import re
 import json
+import fnmatch
 import argparse
 from pathlib import Path
 
-IGNORED_DIRECTORIES = {
+DEFAULT_IGNORED_DIRECTORIES = {
     ".git",
     ".hg",
     ".svn",
@@ -38,7 +40,7 @@ IGNORED_DIRECTORIES = {
     "scripts",
 }
 
-IGNORED_EXTENSIONS = {
+DEFAULT_IGNORED_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp",
     ".zip", ".tar", ".gz", ".7z", ".rar",
     ".pdf", ".doc", ".docx", ".xls", ".xlsx",
@@ -49,8 +51,7 @@ IGNORED_EXTENSIONS = {
     ".lock", "-lock.json", ".min.js", ".min.css", ".map"
 }
 
-# Patterns for common personal identifiable information in Portuguese and English
-PATTERNS_COMMON_PII = [
+BASE_PATTERNS_COMMON_PII = [
     r"\b(cpf|cnpj|rg|ssn|tax[_\s]?id)\b",
     r"\b(email|e_mail|electronic[_\s]?mail)\b",
     r"\b(telefone|celular|phone|cellphone|mobile|whatsapp)\b",
@@ -61,8 +62,7 @@ PATTERNS_COMMON_PII = [
     r"\b(nome[_\s]?completo|full[_\s]?name|sobrenome|last[_\s]?name)\b"
 ]
 
-# Patterns for sensitive personal data according to Article 11 of LGPD
-PATTERNS_SENSITIVE_PII = [
+BASE_PATTERNS_SENSITIVE_PII = [
     r"\b(origem[_\s]?racial|raca|etnia|race|ethnicity)\b",
     r"\b(religiao|crenca[_\s]?religiosa|religion|religious[_\s]?belief)\b",
     r"\b(opiniao[_\s]?politica|filiacao[_\s]?partidaria|political[_\s]?opinion)\b",
@@ -73,46 +73,47 @@ PATTERNS_SENSITIVE_PII = [
     r"\b(vida[_\s]?sexual|orientacao[_\s]?sexual|sexual[_\s]?orientation)\b"
 ]
 
-# Patterns for potential PII leaks into log streams or unmasked prints
 PATTERNS_LOG_LEAKS = [
     r"(logger\.(info|debug|warn|error|trace|fatal)|console\.(log|info|warn|error)|print|fmt\.Print|Log::(info|debug|error|warning))\s*\([^)]*(req\.body|request\.body|request->all|\$request|params|payload|data|body)[^)]*\)",
     r"(logger\.(info|debug|warn|error|trace|fatal)|console\.(log|info|warn|error)|print|fmt\.Print|Log::(info|debug|error|warning))\s*\([^)]*(password|senha|secret|cpf|token|cartao|credit_card)[^)]*\)"
 ]
 
-# Patterns for pre-checked consent checkboxes violating freely given consent
 PATTERNS_PRECHECKED_CONSENT = [
     r"(defaultChecked\s*=\s*\{\s*true\s*\}|checked\s*=\s*[\"']checked[\"']|checked\s*=\s*\{\s*true\s*\}|<input[^>]+checked)",
 ]
 
-KEYWORDS_TERMS_AND_PRIVACY = [
-    r"(termos|privacidade|lgpd|consentimento|politica|marketing|newsletter|comunicacao|privacy|terms|consent)"
-]
-
-# Patterns for third-party trackers loaded in application frontends
 PATTERNS_THIRD_PARTY_TRACKERS = [
     r"(googletagmanager\.com|google-analytics\.com|connect\.facebook\.net|clarity\.ms|hotjar\.com|pixel|segment\.com|mixpanel\.com)"
 ]
 
-# Patterns for soft delete without data anonymization
 PATTERNS_SOFT_DELETE = [
     r"\b(deleted_at|is_deleted|soft_delete|removido_em|is_active)\b"
 ]
 
-# Patterns for Data Protection Officer (DPO / Encarregado) contact disclosures
 PATTERNS_DPO = [
     r"\b(encarregado|dpo|privacidade@|dpo@|dataprotection)\b"
 ]
 
 
 class LGPDScanner:
-    """Agnostic scanner analyzing source code for LGPD compliance gaps."""
+    """Agnostic scanner analyzing source code with optional .lgpdrc governance file."""
 
-    def __init__(self, root_path="."):
+    def __init__(self, root_path=".", config_file=None):
         self.root_path = Path(root_path).resolve()
+        self.config = self.load_config(config_file)
+        self.common_pii_patterns = list(BASE_PATTERNS_COMMON_PII)
+        self.sensitive_pii_patterns = list(BASE_PATTERNS_SENSITIVE_PII)
+        self.apply_custom_patterns()
+
         self.results = {
             "stats": {
                 "scanned_files": 0,
-                "total_findings": 0
+                "total_findings": 0,
+                "suppressed_findings": 0
+            },
+            "governance": {
+                "config_loaded": bool(self.config),
+                "dpo_configured": self.config.get("dpo", None)
             },
             "common_pii": [],
             "sensitive_pii": [],
@@ -120,15 +121,72 @@ class LGPDScanner:
             "prechecked_consent": [],
             "third_party_trackers": [],
             "soft_delete_retention": [],
-            "dpo_contacts": []
+            "dpo_contacts": [],
+            "suppressed_findings": []
         }
+
+    def load_config(self, explicit_path):
+        """Locate and read .lgpdrc or .lgpdrc.json configuration file."""
+        candidates = []
+        if explicit_path:
+            candidates.append(Path(explicit_path))
+        else:
+            candidates.append(self.root_path / ".lgpdrc")
+            candidates.append(self.root_path / ".lgpdrc.json")
+
+        for candidate in candidates:
+            if candidate.is_file():
+                try:
+                    with open(candidate, "r", encoding="utf-8") as stream:
+                        return json.load(stream)
+                except Exception:
+                    pass
+        return {}
+
+    def apply_custom_patterns(self):
+        """Append user defined terms from configuration."""
+        for term in self.config.get("custom_pii", []):
+            safe = re.escape(term.strip())
+            self.common_pii_patterns.append(rf"\b({safe})\b")
+
+        for term in self.config.get("custom_sensitive", []):
+            safe = re.escape(term.strip())
+            self.sensitive_pii_patterns.append(rf"\b({safe})\b")
+
+    def is_ignored_by_config(self, relative_path):
+        """Check if relative path matches any ignore pattern from config."""
+        ignore_rules = self.config.get("ignore_paths", [])
+        for rule in ignore_rules:
+            if fnmatch.fnmatch(relative_path, rule) or fnmatch.fnmatch(relative_path, f"*/{rule}"):
+                return True
+        return False
+
+    def check_suppression(self, relative_path, line_number, finding_type, evidence):
+        """Check if finding has an approved suppression from DPO in config."""
+        suppressions = self.config.get("suppressions", [])
+        for item in suppressions:
+            conf_file = item.get("file", "")
+            if conf_file == relative_path or conf_file.endswith(relative_path) or relative_path.endswith(conf_file):
+                target_line = item.get("line")
+                if target_line is None or target_line == line_number:
+                    self.results["suppressed_findings"].append({
+                        "file": relative_path,
+                        "line": line_number,
+                        "finding_type": finding_type,
+                        "evidence": evidence,
+                        "reason": item.get("reason", "Approved suppression"),
+                        "approved_by": item.get("approved_by", "DPO")
+                    })
+                    self.results["stats"]["suppressed_findings"] += 1
+                    return True
+        return False
 
     def is_text_file(self, file_path):
         """Check if file should be analyzed based on extension."""
         suffix = file_path.suffix.lower()
-        if suffix in IGNORED_EXTENSIONS:
+        if suffix in DEFAULT_IGNORED_EXTENSIONS:
             return False
-        for ignored_suffix in IGNORED_EXTENSIONS:
+        for ignored_suffix in DEFAULT_IGNORED_EXTENSIONS:
             if file_path.name.lower().endswith(ignored_suffix):
                 return False
         return True
@@ -148,74 +206,84 @@ class LGPDScanner:
             return
 
         # Check for sensitive personal data
-        for pattern in PATTERNS_SENSITIVE_PII:
+        for pattern in self.sensitive_pii_patterns:
             match = re.search(pattern, clean_line, re.IGNORECASE)
             if match:
-                self.results["sensitive_pii"].append({
-                    "file": relative_path,
-                    "line": line_number,
-                    "matched_term": match.group(0),
-                    "evidence": clean_line[:160]
-                })
+                evidence = clean_line[:160]
+                if not self.check_suppression(relative_path, line_number, "sensitive_pii", evidence):
+                    self.results["sensitive_pii"].append({
+                        "file": relative_path,
+                        "line": line_number,
+                        "matched_term": match.group(0),
+                        "evidence": evidence
+                    })
                 break
 
         # Check for common personal identifiable information
-        for pattern in PATTERNS_COMMON_PII:
+        for pattern in self.common_pii_patterns:
             match = re.search(pattern, clean_line, re.IGNORECASE)
             if match:
-                self.results["common_pii"].append({
-                    "file": relative_path,
-                    "line": line_number,
-                    "matched_term": match.group(0),
-                    "evidence": clean_line[:160]
-                })
+                evidence = clean_line[:160]
+                if not self.check_suppression(relative_path, line_number, "common_pii", evidence):
+                    self.results["common_pii"].append({
+                        "file": relative_path,
+                        "line": line_number,
+                        "matched_term": match.group(0),
+                        "evidence": evidence
+                    })
                 break
 
-        # Check for unmasked log leak risks
+        # Check for unmasked log leaks
         for pattern in PATTERNS_LOG_LEAKS:
             match = re.search(pattern, clean_line, re.IGNORECASE)
             if match:
-                self.results["log_leaks"].append({
-                    "file": relative_path,
-                    "line": line_number,
-                    "evidence": clean_line[:160]
-                })
+                evidence = clean_line[:160]
+                if not self.check_suppression(relative_path, line_number, "log_leak", evidence):
+                    self.results["log_leaks"].append({
+                        "file": relative_path,
+                        "line": line_number,
+                        "evidence": evidence
+                    })
                 break
 
         # Check for pre-checked consent forms
         for pattern in PATTERNS_PRECHECKED_CONSENT:
             if re.search(pattern, clean_line, re.IGNORECASE):
-                for term in KEYWORDS_TERMS_AND_PRIVACY:
-                    if re.search(term, clean_line, re.IGNORECASE):
-                        self.results["prechecked_consent"].append({
-                            "file": relative_path,
-                            "line": line_number,
-                            "evidence": clean_line[:160]
-                        })
-                        break
+                evidence = clean_line[:160]
+                if not self.check_suppression(relative_path, line_number, "prechecked_consent", evidence):
+                    self.results["prechecked_consent"].append({
+                        "file": relative_path,
+                        "line": line_number,
+                        "evidence": evidence
+                    })
+                break
 
         # Check for third-party trackers
         for pattern in PATTERNS_THIRD_PARTY_TRACKERS:
             match = re.search(pattern, clean_line, re.IGNORECASE)
             if match:
-                self.results["third_party_trackers"].append({
-                    "file": relative_path,
-                    "line": line_number,
-                    "provider": match.group(0),
-                    "evidence": clean_line[:160]
-                })
+                evidence = clean_line[:160]
+                if not self.check_suppression(relative_path, line_number, "third_party_tracker", evidence):
+                    self.results["third_party_trackers"].append({
+                        "file": relative_path,
+                        "line": line_number,
+                        "provider": match.group(0),
+                        "evidence": evidence
+                    })
                 break
 
-        # Check for soft delete retention patterns in schema and models
+        # Check for soft delete patterns in schemas or models
         for pattern in PATTERNS_SOFT_DELETE:
             match = re.search(pattern, clean_line, re.IGNORECASE)
             if match:
-                if re.search(r"(class|interface|type|struct|table|create|schema|column)", clean_line, re.IGNORECASE):
-                    self.results["soft_delete_retention"].append({
-                        "file": relative_path,
-                        "line": line_number,
-                        "evidence": clean_line[:160]
-                    })
+                if re.search(r"(self\.|this\.|column|field|type|schema|class|interface|struct|=|\:)", clean_line, re.IGNORECASE):
+                    evidence = clean_line[:160]
+                    if not self.check_suppression(relative_path, line_number, "soft_delete_retention", evidence):
+                        self.results["soft_delete_retention"].append({
+                            "file": relative_path,
+                            "line": line_number,
+                            "evidence": evidence
+                        })
                     break
 
         # Check for DPO contact mentions
@@ -232,7 +300,7 @@ class LGPDScanner:
     def run(self):
         """Traverse directory tree and execute scans."""
         for root_dir, dirs, files in os.walk(self.root_path):
-            dirs[:] = [d for d in dirs if d not in IGNORED_DIRECTORIES and not d.startswith(".")]
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORED_DIRECTORIES and not d.startswith(".")]
 
             for filename in files:
                 target_file = Path(root_dir) / filename
@@ -243,6 +311,9 @@ class LGPDScanner:
                     rel_path = str(target_file.relative_to(self.root_path))
                 except ValueError:
                     rel_path = str(target_file)
+
+                if self.is_ignored_by_config(rel_path):
+                    continue
 
                 self.results["stats"]["scanned_files"] += 1
                 lines = self.read_lines(target_file)
@@ -266,10 +337,11 @@ def main():
     """CLI entry point for scanner execution."""
     parser = argparse.ArgumentParser(description="Technology-agnostic LGPD compliance code scanner")
     parser.add_argument("--dir", default=".", help="Root directory to scan")
+    parser.add_argument("--config", help="Explicit path to .lgpdrc configuration file")
     parser.add_argument("--output", help="Target JSON file path")
     args = parser.parse_args()
 
-    scanner = LGPDScanner(root_path=args.dir)
+    scanner = LGPDScanner(root_path=args.dir, config_file=args.config)
     data = scanner.run()
 
     json_output = json.dumps(data, indent=2, ensure_ascii=False)
